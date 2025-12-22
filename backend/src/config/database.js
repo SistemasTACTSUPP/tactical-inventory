@@ -13,11 +13,7 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
   enableKeepAlive: true,
-  keepAliveInitialDelay: 0,
-  // SSL para PlanetScale y otros servicios en la nube
-  ssl: process.env.DB_SSL === 'true' ? {
-    rejectUnauthorized: false
-  } : undefined
+  keepAliveInitialDelay: 0
 });
 
 // Función para probar la conexión
