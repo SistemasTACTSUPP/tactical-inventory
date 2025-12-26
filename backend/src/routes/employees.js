@@ -136,7 +136,7 @@ router.post('/', authenticateToken, async (req, res) => {
 router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { fullName, service, hireDate, lastRenewalDate, secondUniformDate, nextRenewalDate } = req.body;
+    const { fullName, service, hireDate, lastRenewalDate, secondUniformDate, nextRenewalDate, status } = req.body;
 
     // Solo Admin puede actualizar colaboradores
     if (req.user.role !== 'Admin') {
@@ -151,17 +151,17 @@ router.put('/:id', authenticateToken, async (req, res) => {
       ? `UPDATE employees 
          SET full_name = $1, service = $2, hire_date = $3, 
              last_renewal_date = $4, second_uniform_date = $5, next_renewal_date = $6,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE employee_id = $7`
+             status = $7, updated_at = CURRENT_TIMESTAMP
+         WHERE employee_id = $8`
       : `UPDATE employees 
          SET full_name = ?, service = ?, hire_date = ?, 
              last_renewal_date = ?, second_uniform_date = ?, next_renewal_date = ?,
-             updated_at = CURRENT_TIMESTAMP
+             status = ?, updated_at = CURRENT_TIMESTAMP
          WHERE employee_id = ?`;
     
     await pool.execute(
       updateQuery,
-      [fullName, service, hireDate, lastRenewalDate || null, secondUniformDate || null, nextRenewalDate || null, id]
+      [fullName, service, hireDate, lastRenewalDate || null, secondUniformDate || null, nextRenewalDate || null, status || 'Activo', id]
     );
 
     // Emitir evento WebSocket
