@@ -53,14 +53,32 @@ router.get('/', authenticateToken, requireRole('Admin'), async (req, res) => {
     const [orders] = await pool.execute(ordersQuery);
 
     // Obtener items para cada pedido y transformar a camelCase
-    for (const order of orders) {
+    const transformedOrders = orders.map(order => {
+      // Esto se ejecutará después, pero necesitamos la estructura
+      return {
+        id: order.id,
+        orderNumber: order.order_number || order.orderNumber,
+        date: order.date ? order.date.toString() : '',
+        supplier: order.supplier || null,
+        status: order.status || 'Pendiente',
+        totalAmount: order.total_amount || order.totalAmount || 0,
+        createdBy: order.created_by || order.createdBy || null,
+        createdAt: order.created_at ? order.created_at.toString() : '',
+        updatedAt: order.updated_at ? order.updated_at.toString() : '',
+        items: [] // Se llenará después
+      };
+    });
+
+    // Obtener items para cada pedido
+    for (let i = 0; i < orders.length; i++) {
+      const order = orders[i];
       const itemsQuery = isPostgreSQL
         ? 'SELECT * FROM order_items WHERE order_id = $1'
         : 'SELECT * FROM order_items WHERE order_id = ?';
       const [items] = await pool.execute(itemsQuery, [order.id]);
       
       // Transformar items de snake_case a camelCase
-      order.items = items.map(item => ({
+      transformedOrders[i].items = items.map(item => ({
         id: item.id,
         code: item.code,
         description: item.description,
@@ -69,7 +87,7 @@ router.get('/', authenticateToken, requireRole('Admin'), async (req, res) => {
       }));
     }
 
-    res.json(orders);
+    res.json(transformedOrders);
   } catch (error) {
     console.error('Error al obtener pedidos:', error);
     res.status(500).json({ error: 'Error al obtener pedidos' });
@@ -155,8 +173,30 @@ router.post('/', authenticateToken, requireRole('Admin'), async (req, res) => {
           : 'SELECT * FROM order_items WHERE order_id = ?';
         const [itemsResult] = await connection.execute(getItemsQuery, [orderId]);
         
-        order.items = itemsResult;
-        res.json(order);
+        // Transformar items de snake_case a camelCase
+        const transformedItems = itemsResult.map(item => ({
+          id: item.id,
+          code: item.code,
+          description: item.description,
+          qty: item.qty,
+          unitPrice: item.unit_price || item.unitPrice || 0
+        }));
+        
+        // Transformar pedido a camelCase
+        const transformedOrder = {
+          id: order.id,
+          orderNumber: order.order_number || order.orderNumber,
+          date: order.date ? order.date.toString() : '',
+          supplier: order.supplier || null,
+          status: order.status || 'Pendiente',
+          totalAmount: order.total_amount || order.totalAmount || 0,
+          createdBy: order.created_by || order.createdBy || null,
+          createdAt: order.created_at ? order.created_at.toString() : '',
+          updatedAt: order.updated_at ? order.updated_at.toString() : '',
+          items: transformedItems
+        };
+        
+        res.json(transformedOrder);
       } else {
         res.json({ id: orderId, orderNumber, message: 'Pedido creado correctamente' });
       }
@@ -199,7 +239,7 @@ router.get('/:id', authenticateToken, requireRole('Admin'), async (req, res) => 
     const [items] = await pool.execute(getItemsQuery, [id]);
     
     // Transformar items de snake_case a camelCase
-    order.items = items.map(item => ({
+    const transformedItems = items.map(item => ({
       id: item.id,
       code: item.code,
       description: item.description,
@@ -207,7 +247,21 @@ router.get('/:id', authenticateToken, requireRole('Admin'), async (req, res) => 
       unitPrice: item.unit_price || item.unitPrice || 0
     }));
     
-    res.json(order);
+    // Transformar pedido a camelCase
+    const transformedOrder = {
+      id: order.id,
+      orderNumber: order.order_number || order.orderNumber,
+      date: order.date ? order.date.toString() : '',
+      supplier: order.supplier || null,
+      status: order.status || 'Pendiente',
+      totalAmount: order.total_amount || order.totalAmount || 0,
+      createdBy: order.created_by || order.createdBy || null,
+      createdAt: order.created_at ? order.created_at.toString() : '',
+      updatedAt: order.updated_at ? order.updated_at.toString() : '',
+      items: transformedItems
+    };
+    
+    res.json(transformedOrder);
   } catch (error) {
     console.error('Error al obtener pedido:', error);
     res.status(500).json({ error: 'Error al obtener pedido' });
