@@ -11,10 +11,18 @@ const calculateSecondUniformDate = (hireDate) => {
   date.setDate(date.getDate() + 15);
   
   const day = date.getDate();
+  const month = date.getMonth();
+  const year = date.getFullYear();
+  
+  // Si entró el 10, se recorre al 30 del mismo mes
+  // Si entró el 22, se recorre al 15 del siguiente mes
   if (day <= 15) {
+    // Si está en la primera mitad del mes, ajustar al 15
     date.setDate(15);
   } else {
-    date.setDate(30);
+    // Si está en la segunda mitad, ajustar al 30 (o último día del mes)
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    date.setDate(Math.min(30, lastDay));
   }
   
   return date.toISOString().slice(0, 10);
@@ -31,6 +39,23 @@ const calculateNextRenewalDate = (baseDate) => {
 const isPostgreSQL = process.env.DATABASE_URL?.startsWith('postgresql://') || 
                      process.env.DB_PORT === '5432' || 
                      process.env.DB_TYPE === 'postgresql';
+
+// Obtener lista de servicios únicos
+router.get('/services', authenticateToken, async (req, res) => {
+  try {
+    const servicesQuery = isPostgreSQL
+      ? 'SELECT DISTINCT service FROM employees WHERE service IS NOT NULL AND service != \'\' ORDER BY service'
+      : 'SELECT DISTINCT service FROM employees WHERE service IS NOT NULL AND service != \'\' ORDER BY service';
+    
+    const [services] = await pool.execute(servicesQuery);
+    const serviceList = services.map(s => s.service).filter(s => s);
+    
+    res.json(serviceList);
+  } catch (error) {
+    console.error('Error al obtener servicios:', error);
+    res.status(500).json({ error: 'Error al obtener servicios' });
+  }
+});
 
 // Obtener todos los colaboradores
 router.get('/', authenticateToken, async (req, res) => {
