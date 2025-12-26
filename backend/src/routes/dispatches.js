@@ -5,6 +5,11 @@ import { emitInventoryUpdate, getIO } from '../server.js';
 
 const router = express.Router();
 
+// Detectar si es PostgreSQL
+const isPostgreSQL = process.env.DATABASE_URL?.startsWith('postgresql://') || 
+                     process.env.DB_PORT === '5432' || 
+                     process.env.DB_TYPE === 'postgresql';
+
 // Obtener todas las salidas
 router.get('/', authenticateToken, async (req, res) => {
   try {
