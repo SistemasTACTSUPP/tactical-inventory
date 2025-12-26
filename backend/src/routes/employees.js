@@ -376,5 +376,42 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Obtener historial de entregas de un colaborador
+router.get('/:id/history', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Obtener todas las salidas (dispatches) para este empleado
+    const getDispatchesQuery = isPostgreSQL
+      ? 'SELECT d.* FROM dispatches d WHERE d.employee_id = $1 ORDER BY d.date DESC, d.id DESC'
+      : 'SELECT d.* FROM dispatches d WHERE d.employee_id = ? ORDER BY d.date DESC, d.id DESC';
+    
+    const [dispatches] = await pool.execute(getDispatchesQuery, [id]);
+    
+    // Obtener items para cada salida
+    for (const dispatch of dispatches) {
+      const getItemsQuery = isPostgreSQL
+        ? 'SELECT * FROM dispatch_items WHERE dispatch_id = $1'
+        : 'SELECT * FROM dispatch_items WHERE dispatch_id = ?';
+      const [items] = await pool.execute(getItemsQuery, [dispatch.id]);
+      
+      // Transformar items a camelCase
+      dispatch.items = items.map(item => ({
+        id: item.id,
+        code: item.code,
+        description: item.description,
+        size: item.size || null,
+        qty: item.qty,
+        site: item.site || null
+      }));
+    }
+    
+    res.json(dispatches);
+  } catch (error) {
+    console.error('Error al obtener historial:', error);
+    res.status(500).json({ error: 'Error al obtener historial' });
+  }
+});
+
 export default router;
 
