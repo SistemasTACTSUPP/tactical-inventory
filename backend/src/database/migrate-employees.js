@@ -62,14 +62,44 @@ const migrateEmployees = async () => {
     
     // Conectar a PostgreSQL
     console.log('🔌 Conectando a PostgreSQL...');
+    console.log('   URL:', postgresUrl.substring(0, 50) + '...');
+    
+    // Parsear la URL para verificar formato
+    try {
+      const url = new URL(postgresUrl);
+      console.log('   Host:', url.hostname);
+      console.log('   Port:', url.port || '5432');
+      console.log('   Database:', url.pathname.slice(1));
+    } catch (e) {
+      console.warn('   ⚠️  No se pudo parsear la URL:', e.message);
+    }
+    
     pgPool = new Pool({
       connectionString: postgresUrl,
-      ssl: { rejectUnauthorized: false }
+      ssl: { rejectUnauthorized: false },
+      // Agregar timeout más largo para conexiones remotas
+      connectionTimeoutMillis: 30000,
+      idleTimeoutMillis: 30000,
     });
     
-    // Probar conexión
-    await pgPool.query('SELECT NOW()');
-    console.log('✅ Conectado a PostgreSQL');
+    // Probar conexión con timeout
+    console.log('   ⏳ Intentando conectar...');
+    try {
+      await Promise.race([
+        pgPool.query('SELECT NOW()'),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout de conexión')), 30000)
+        )
+      ]);
+      console.log('✅ Conectado a PostgreSQL');
+    } catch (error) {
+      console.error('❌ Error al conectar a PostgreSQL:', error.message);
+      console.error('   Verifica que:');
+      console.error('   1. La URL de DATABASE_URL sea correcta');
+      console.error('   2. Usa la URL EXTERNA de Render, no la interna');
+      console.error('   3. El servicio de PostgreSQL esté activo en Render');
+      throw error;
+    }
     
     // Verificar cuántos empleados ya existen en PostgreSQL
     const [existing] = await pgPool.query('SELECT COUNT(*) as count FROM employees');
