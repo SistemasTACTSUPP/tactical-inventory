@@ -25,15 +25,16 @@ const convertToPostgreSQL = (sql) => {
   converted = converted.replace(/\bINT\s+AUTO_INCREMENT\b/gi, 'SERIAL');
   converted = converted.replace(/\bINTEGER\s+AUTO_INCREMENT\b/gi, 'SERIAL');
   
-  // Convertir ENUM a VARCHAR con CHECK constraint - mejor regex
+  // Convertir ENUM a VARCHAR con CHECK constraint - CORREGIDO
   converted = converted.replace(/\b(\w+)\s+ENUM\(([^)]+)\)/gi, (match, columnName, values) => {
-    return `${columnName} VARCHAR(50) CHECK (${columnName} IN ${values})`;
+    // Asegurar que los valores tengan paréntesis
+    return `${columnName} VARCHAR(50) CHECK (${columnName} IN (${values}))`;
   });
   
   // Eliminar ON UPDATE CURRENT_TIMESTAMP
   converted = converted.replace(/\s+ON UPDATE CURRENT_TIMESTAMP/gi, '');
   
-  // Convertir UNIQUE KEY a CONSTRAINT (mejor regex)
+  // Convertir UNIQUE KEY a CONSTRAINT
   converted = converted.replace(/,\s*UNIQUE KEY\s+(\w+)\s*\(([^)]+)\)/gi, ', CONSTRAINT $1 UNIQUE ($2)');
   
   // Eliminar ON DUPLICATE KEY UPDATE
@@ -75,20 +76,26 @@ const runMigration = async () => {
         // Filtrar solo comentarios y líneas completamente vacías
         if (trimmed.length === 0) return false;
         if (trimmed.startsWith('--')) return false;
-        if (trimmed.startsWith('/*') && trimmed.endsWith('*/')) return false;
-        // Asegurarse de que tenga contenido SQL real
-        if (trimmed.length < 10) return false; // Muy corto, probablemente basura
-        return true;
+        if (trimmed.startsWith('/*')) return false;
+        // Aceptar cualquier statement que tenga CREATE, INSERT, ALTER, etc.
+        const hasSqlKeyword = /^(CREATE|INSERT|ALTER|UPDATE|DELETE|DROP|SELECT)/i.test(trimmed);
+        return hasSqlKeyword || trimmed.length > 20; // Aceptar statements largos aunque no tengan keyword
       });
     
     console.log(`📝 Statements válidos después del filtrado: ${statements.length}`);
     
     if (statements.length === 0) {
       console.error('❌ No se encontraron statements válidos para ejecutar');
-      console.log('🔍 Primeros 500 caracteres del SQL convertido:');
-      console.log(sql.substring(0, 500));
+      console.log('🔍 Primeros 1000 caracteres del SQL convertido:');
+      console.log(sql.substring(0, 1000));
       process.exit(1);
     }
+    
+    // Mostrar preview de los primeros statements
+    console.log('📋 Preview de los primeros 3 statements:');
+    statements.slice(0, 3).forEach((stmt, idx) => {
+      console.log(`  ${idx + 1}. ${stmt.substring(0, 80).replace(/\n/g, ' ')}...`);
+    });
     
     // Ejecutar cada statement
     let successCount = 0;
@@ -98,12 +105,13 @@ const runMigration = async () => {
       const statement = statements[i];
       if (statement.length > 0) {
         try {
-          // Mostrar los primeros 50 caracteres del statement para debug
-          const preview = statement.substring(0, 50).replace(/\n/g, ' ');
-          console.log(`  🔄 Ejecutando statement ${i + 1}/${statements.length}: ${preview}...`);
+          // Mostrar los primeros 60 caracteres del statement para debug
+          const preview = statement.substring(0, 60).replace(/\n/g, ' ').trim();
+          console.log(`  🔄 [${i + 1}/${statements.length}] ${preview}...`);
           
           await pool.execute(statement);
           successCount++;
+          console.log(`     ✅ Éxito`);
         } catch (error) {
           // Ignorar errores de "ya existe" para tablas
           const errorMsg = error.message.toLowerCase();
@@ -113,21 +121,25 @@ const runMigration = async () => {
               errorMsg.includes('syntax error at or near "use"') ||
               errorMsg.includes('syntax error at or near "create database"')) {
             // Ignorar estos errores
-            console.log(`  ⚠️  Ignorado (ya existe): ${error.message.substring(0, 50)}`);
+            console.log(`     ⚠️  Ignorado (ya existe o comando no válido)`);
           } else {
-            console.warn(`  ⚠️  Error en statement ${i + 1}: ${error.message}`);
-            console.warn(`  📝 Statement: ${statement.substring(0, 100)}...`);
+            console.warn(`     ❌ Error: ${error.message}`);
+            // Mostrar más detalles del error para CREATE TABLE
+            if (statement.toUpperCase().includes('CREATE TABLE')) {
+              console.warn(`     📝 Statement problemático (primeros 200 chars):`);
+              console.warn(`     ${statement.substring(0, 200)}`);
+            }
             errorCount++;
           }
         }
       }
     }
     
-    console.log(`✅ Migración completada: ${successCount} exitosos, ${errorCount} errores`);
+    console.log(`\n✅ Migración completada: ${successCount} exitosos, ${errorCount} errores`);
     
     // Verificar que las tablas principales existan
     if (isPostgreSQL) {
-      console.log('🔍 Verificando que las tablas se crearon correctamente...');
+      console.log('\n🔍 Verificando que las tablas se crearon correctamente...');
       try {
         const [tables] = await pool.execute(`
           SELECT table_name 
