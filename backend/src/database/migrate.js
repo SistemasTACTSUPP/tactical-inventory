@@ -25,30 +25,18 @@ const convertToPostgreSQL = (sql) => {
   converted = converted.replace(/\bINT\s+AUTO_INCREMENT\b/gi, 'SERIAL');
   converted = converted.replace(/\bINTEGER\s+AUTO_INCREMENT\b/gi, 'SERIAL');
   
-  // Convertir ENUM a VARCHAR con CHECK constraint
-  converted = converted.replace(/role\s+ENUM\(([^)]+)\)/gi, (match, values) => {
-    return `role VARCHAR(50) CHECK (role IN ${values})`;
-  });
-  converted = converted.replace(/site\s+ENUM\(([^)]+)\)/gi, (match, values) => {
-    return `site VARCHAR(50) CHECK (site IN ${values})`;
-  });
-  converted = converted.replace(/status\s+ENUM\(([^)]+)\)/gi, (match, values) => {
-    return `status VARCHAR(50) CHECK (status IN ${values})`;
-  });
-  converted = converted.replace(/dispatch_type\s+ENUM\(([^)]+)\)/gi, (match, values) => {
-    return `dispatch_type VARCHAR(50) CHECK (dispatch_type IN ${values})`;
-  });
-  converted = converted.replace(/destination\s+ENUM\(([^)]+)\)/gi, (match, values) => {
-    return `destination VARCHAR(50) CHECK (destination IN ${values})`;
+  // Convertir ENUM a VARCHAR con CHECK constraint - mejor regex
+  converted = converted.replace(/\b(\w+)\s+ENUM\(([^)]+)\)/gi, (match, columnName, values) => {
+    return `${columnName} VARCHAR(50) CHECK (${columnName} IN ${values})`;
   });
   
-  // Eliminar ON UPDATE CURRENT_TIMESTAMP (PostgreSQL usa triggers, pero por ahora lo ignoramos)
+  // Eliminar ON UPDATE CURRENT_TIMESTAMP
   converted = converted.replace(/\s+ON UPDATE CURRENT_TIMESTAMP/gi, '');
   
-  // Convertir UNIQUE KEY a CONSTRAINT
+  // Convertir UNIQUE KEY a CONSTRAINT (mejor regex)
   converted = converted.replace(/,\s*UNIQUE KEY\s+(\w+)\s*\(([^)]+)\)/gi, ', CONSTRAINT $1 UNIQUE ($2)');
   
-  // Convertir ON DUPLICATE KEY UPDATE (MySQL) - eliminarlo por ahora, se manejará en el código
+  // Eliminar ON DUPLICATE KEY UPDATE
   converted = converted.replace(/ON DUPLICATE KEY UPDATE[^;]*/gi, '');
   
   // Eliminar CHARACTER SET y COLLATE
@@ -66,26 +54,41 @@ const runMigration = async () => {
     const sqlFile = path.join(__dirname, 'schema.sql');
     let sql = fs.readFileSync(sqlFile, 'utf8');
     
+    console.log(`📄 Archivo SQL leído: ${sql.length} caracteres`);
+    
     // Convertir a PostgreSQL si es necesario
     if (isPostgreSQL) {
       console.log('🔄 Convirtiendo SQL de MySQL a PostgreSQL...');
+      const beforeLength = sql.length;
       sql = convertToPostgreSQL(sql);
+      console.log(`📝 SQL convertido: ${beforeLength} -> ${sql.length} caracteres`);
     }
     
     // Dividir en statements individuales
-    const statements = sql
-      .split(';')
+    const rawStatements = sql.split(';');
+    console.log(`📝 Statements encontrados (raw): ${rawStatements.length}`);
+    
+    const statements = rawStatements
       .map(stmt => stmt.trim())
       .filter(stmt => {
-        // Filtrar comentarios y líneas vacías
         const trimmed = stmt.trim();
-        return trimmed.length > 0 && 
-               !trimmed.startsWith('--') && 
-               !trimmed.startsWith('/*') &&
-               trimmed !== '';
+        // Filtrar solo comentarios y líneas completamente vacías
+        if (trimmed.length === 0) return false;
+        if (trimmed.startsWith('--')) return false;
+        if (trimmed.startsWith('/*') && trimmed.endsWith('*/')) return false;
+        // Asegurarse de que tenga contenido SQL real
+        if (trimmed.length < 10) return false; // Muy corto, probablemente basura
+        return true;
       });
     
-    console.log(`📝 Encontrados ${statements.length} statements para ejecutar`);
+    console.log(`📝 Statements válidos después del filtrado: ${statements.length}`);
+    
+    if (statements.length === 0) {
+      console.error('❌ No se encontraron statements válidos para ejecutar');
+      console.log('🔍 Primeros 500 caracteres del SQL convertido:');
+      console.log(sql.substring(0, 500));
+      process.exit(1);
+    }
     
     // Ejecutar cada statement
     let successCount = 0;
@@ -95,30 +98,32 @@ const runMigration = async () => {
       const statement = statements[i];
       if (statement.length > 0) {
         try {
+          // Mostrar los primeros 50 caracteres del statement para debug
+          const preview = statement.substring(0, 50).replace(/\n/g, ' ');
+          console.log(`  🔄 Ejecutando statement ${i + 1}/${statements.length}: ${preview}...`);
+          
           await pool.execute(statement);
           successCount++;
-          // Mostrar progreso cada 5 statements
-          if ((i + 1) % 5 === 0) {
-            console.log(`  ✅ Procesados ${i + 1}/${statements.length} statements...`);
-          }
         } catch (error) {
           // Ignorar errores de "ya existe" para tablas
           const errorMsg = error.message.toLowerCase();
           if (errorMsg.includes('already exists') || 
               errorMsg.includes('duplicate key') ||
-              errorMsg.includes('relation') && errorMsg.includes('already exists') ||
+              (errorMsg.includes('relation') && errorMsg.includes('already exists')) ||
               errorMsg.includes('syntax error at or near "use"') ||
               errorMsg.includes('syntax error at or near "create database"')) {
             // Ignorar estos errores
+            console.log(`  ⚠️  Ignorado (ya existe): ${error.message.substring(0, 50)}`);
           } else {
-            console.warn(`⚠️  Advertencia en statement ${i + 1}: ${error.message}`);
+            console.warn(`  ⚠️  Error en statement ${i + 1}: ${error.message}`);
+            console.warn(`  📝 Statement: ${statement.substring(0, 100)}...`);
             errorCount++;
           }
         }
       }
     }
     
-    console.log(`✅ Migración completada: ${successCount} exitosos, ${errorCount} advertencias`);
+    console.log(`✅ Migración completada: ${successCount} exitosos, ${errorCount} errores`);
     
     // Verificar que las tablas principales existan
     if (isPostgreSQL) {
@@ -132,9 +137,13 @@ const runMigration = async () => {
           ORDER BY table_name
         `);
         console.log(`📊 Tablas encontradas: ${tables.length}`);
-        tables.forEach(table => {
-          console.log(`  - ${table.table_name}`);
-        });
+        if (tables.length > 0) {
+          tables.forEach(table => {
+            console.log(`  ✅ ${table.table_name}`);
+          });
+        } else {
+          console.warn('  ⚠️  No se encontraron tablas. La migración puede haber fallado.');
+        }
       } catch (error) {
         console.warn(`⚠️  No se pudo verificar tablas: ${error.message}`);
       }
@@ -143,6 +152,7 @@ const runMigration = async () => {
     process.exit(0);
   } catch (error) {
     console.error('❌ Error en la migración:', error);
+    console.error('Stack:', error.stack);
     process.exit(1);
   }
 };
