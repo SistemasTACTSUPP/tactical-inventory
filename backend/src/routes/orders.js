@@ -129,7 +129,25 @@ router.post('/', authenticateToken, requireRole('Admin'), async (req, res) => {
       if (connection.commit) {
         await connection.commit();
       }
-      res.json({ id: orderId, orderNumber, message: 'Pedido creado correctamente' });
+      
+      // Obtener el pedido completo con items para devolverlo
+      const getOrderQuery = isPostgreSQL
+        ? 'SELECT * FROM orders WHERE id = $1'
+        : 'SELECT * FROM orders WHERE id = ?';
+      const [orderResult] = await connection.execute(getOrderQuery, [orderId]);
+      
+      if (orderResult.length > 0) {
+        const order = orderResult[0];
+        const getItemsQuery = isPostgreSQL
+          ? 'SELECT * FROM order_items WHERE order_id = $1'
+          : 'SELECT * FROM order_items WHERE order_id = ?';
+        const [itemsResult] = await connection.execute(getItemsQuery, [orderId]);
+        
+        order.items = itemsResult;
+        res.json(order);
+      } else {
+        res.json({ id: orderId, orderNumber, message: 'Pedido creado correctamente' });
+      }
     } catch (error) {
       if (connection.rollback) {
         await connection.rollback();
