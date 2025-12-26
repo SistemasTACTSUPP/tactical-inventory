@@ -30,18 +30,21 @@ const seedCedisData = async () => {
     let inserted = 0;
     let updated = 0;
     
-    // Para PostgreSQL, usar transacciones directamente con el pool
-    // Para MySQL, usar getConnection() si está disponible
-    const useTransaction = !isPostgreSQL && typeof pool.getConnection === 'function';
-    
+    // Para PostgreSQL, no necesitamos getConnection(), usamos el pool directamente
+    // Para MySQL, intentamos usar getConnection() si está disponible
     let connection = null;
-    
-    if (useTransaction) {
-      connection = await pool.getConnection();
-      await connection.beginTransaction();
-    }
+    let useTransaction = false;
     
     try {
+      // Intentar obtener conexión (solo para MySQL)
+      if (!isPostgreSQL && typeof pool.getConnection === 'function') {
+        connection = await pool.getConnection();
+        if (connection && typeof connection.beginTransaction === 'function') {
+          await connection.beginTransaction();
+          useTransaction = true;
+        }
+      }
+      
       for (const item of cedisRawData) {
         if (!item.code || item.code.trim() === '') continue;
         
@@ -71,11 +74,26 @@ const seedCedisData = async () => {
           status = 'Reordenar';
         }
         
+        // Verificar si el item ya existe
+        let exists = false;
+        if (isPostgreSQL) {
+          const [existing] = await pool.execute(
+            'SELECT code FROM inventory_items WHERE code = $1 AND site = $2',
+            [item.code, 'CEDIS']
+          );
+          exists = existing && existing.length > 0;
+        } else {
+          const [existing] = await (connection || pool).execute(
+            'SELECT code FROM inventory_items WHERE code = ? AND site = ?',
+            [item.code, 'CEDIS']
+          );
+          exists = existing && existing.length > 0;
+        }
+        
         // Insertar o actualizar - sintaxis diferente para PostgreSQL y MySQL
-        let result;
         if (isPostgreSQL) {
           // PostgreSQL usa ON CONFLICT
-          [result] = await pool.execute(
+          await pool.execute(
             `INSERT INTO inventory_items 
              (code, description, size, stock_new, stock_recovered, stock_min, site, status)
              VALUES ($1, $2, $3, $4, $5, $6, 'CEDIS', $7)
@@ -91,7 +109,7 @@ const seedCedisData = async () => {
           );
         } else {
           // MySQL usa ON DUPLICATE KEY UPDATE
-          [result] = await (connection || pool).execute(
+          await (connection || pool).execute(
             `INSERT INTO inventory_items 
              (code, description, size, stock_new, stock_recovered, stock_min, site, status)
              VALUES (?, ?, ?, ?, ?, ?, 'CEDIS', ?)
@@ -107,43 +125,11 @@ const seedCedisData = async () => {
           );
         }
         
-        // Verificar si fue insert o update
-        if (isPostgreSQL) {
-          // PostgreSQL devuelve rowCount
-          if (result && result.length > 0 && result[0] && result[0].rowCount !== undefined) {
-            // Es un resultado de query, verificar si hay filas
-            const rowCount = result[0].rowCount || (Array.isArray(result[0]) ? result[0].length : 0);
-            if (rowCount > 0) {
-              // Necesitamos verificar si ya existía
-              const [existing] = await pool.execute(
-                'SELECT code FROM inventory_items WHERE code = $1 AND site = $2',
-                [item.code, 'CEDIS']
-              );
-              if (existing && existing.length > 0) {
-                updated++;
-              } else {
-                inserted++;
-              }
-            }
-          } else {
-            // Intentar determinar si fue insert o update
-            const [existing] = await pool.execute(
-              'SELECT code FROM inventory_items WHERE code = $1 AND site = $2',
-              [item.code, 'CEDIS']
-            );
-            if (existing && existing.length > 0) {
-              updated++;
-            } else {
-              inserted++;
-            }
-          }
+        // Contar insertados vs actualizados
+        if (exists) {
+          updated++;
         } else {
-          // MySQL devuelve affectedRows
-          if (result.affectedRows === 1) {
-            inserted++;
-          } else {
-            updated++;
-          }
+          inserted++;
         }
       }
       
@@ -158,6 +144,7 @@ const seedCedisData = async () => {
       }
       throw error;
     } finally {
+      // Solo release si es MySQL y tiene el método
       if (connection && typeof connection.release === 'function') {
         connection.release();
       }
