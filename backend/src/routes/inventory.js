@@ -7,11 +7,17 @@ const router = express.Router();
 // Obtener inventario por sitio
 router.get('/:site', authenticateToken, async (req, res) => {
   try {
-    const { site } = req.params;
+    let { site } = req.params;
+    // Normalizar el sitio a mayúsculas y manejar variaciones
+    site = site.toUpperCase();
+    if (site === 'ACUNA' || site === 'ACUÑA') {
+      site = 'ACUÑA';
+    }
+    
     const allowedSites = ['CEDIS', 'ACUÑA', 'NLD'];
     
     if (!allowedSites.includes(site)) {
-      return res.status(400).json({ error: 'Sitio inválido' });
+      return res.status(400).json({ error: `Sitio inválido: ${req.params.site}. Sitios permitidos: ${allowedSites.join(', ')}` });
     }
 
     // Verificar permisos
@@ -55,10 +61,23 @@ router.get('/:site', authenticateToken, async (req, res) => {
 });
 
 // Crear o actualizar item de inventario
-router.post('/:site', authenticateToken, requireRole('Admin'), async (req, res) => {
+router.post('/:site', authenticateToken, async (req, res) => {
   try {
     const { site } = req.params;
     const { code, description, size, stockNew, stockRecovered, stockMin } = req.body;
+
+    // Verificar permisos: Admin puede crear en cualquier sitio, usuarios de almacén solo en su sitio
+    if (req.user.role !== 'Admin') {
+      const roleSiteMap = {
+        'AlmacenCedis': 'CEDIS',
+        'AlmacenAcuna': 'ACUÑA',
+        'AlmacenNld': 'NLD'
+      };
+      
+      if (roleSiteMap[req.user.role] !== site) {
+        return res.status(403).json({ error: 'No puedes crear artículos en este inventario' });
+      }
+    }
 
     // Calcular status
     const totalStock = (stockNew || 0) + (stockRecovered || 0);
@@ -95,10 +114,23 @@ router.post('/:site', authenticateToken, requireRole('Admin'), async (req, res) 
 });
 
 // Actualizar item específico
-router.put('/:site/:id', authenticateToken, requireRole('Admin'), async (req, res) => {
+router.put('/:site/:id', authenticateToken, async (req, res) => {
   try {
     const { site, id } = req.params;
     const { description, size, stockMin } = req.body;
+
+    // Verificar permisos: Admin puede actualizar en cualquier sitio, usuarios de almacén solo en su sitio
+    if (req.user.role !== 'Admin') {
+      const roleSiteMap = {
+        'AlmacenCedis': 'CEDIS',
+        'AlmacenAcuna': 'ACUÑA',
+        'AlmacenNld': 'NLD'
+      };
+      
+      if (roleSiteMap[req.user.role] !== site) {
+        return res.status(403).json({ error: 'No puedes modificar artículos en este inventario' });
+      }
+    }
 
     await pool.execute(
       `UPDATE inventory_items 
@@ -111,6 +143,40 @@ router.put('/:site/:id', authenticateToken, requireRole('Admin'), async (req, re
   } catch (error) {
     console.error('Error al actualizar item:', error);
     res.status(500).json({ error: 'Error al actualizar item' });
+  }
+});
+
+// Eliminar item de inventario
+router.delete('/:site/:id', authenticateToken, async (req, res) => {
+  try {
+    const { site, id } = req.params;
+
+    // Verificar permisos: Admin puede eliminar en cualquier sitio, usuarios de almacén solo en su sitio
+    if (req.user.role !== 'Admin') {
+      const roleSiteMap = {
+        'AlmacenCedis': 'CEDIS',
+        'AlmacenAcuna': 'ACUÑA',
+        'AlmacenNld': 'NLD'
+      };
+      
+      if (roleSiteMap[req.user.role] !== site) {
+        return res.status(403).json({ error: 'No puedes eliminar artículos en este inventario' });
+      }
+    }
+
+    const [result] = await pool.execute(
+      'DELETE FROM inventory_items WHERE id = ? AND site = ?',
+      [id, site]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Item no encontrado' });
+    }
+
+    res.json({ message: 'Item eliminado correctamente' });
+  } catch (error) {
+    console.error('Error al eliminar item:', error);
+    res.status(500).json({ error: 'Error al eliminar item' });
   }
 });
 
