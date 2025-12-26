@@ -18,6 +18,20 @@ const postgresUrl = process.env.DATABASE_URL;
 
 if (!postgresUrl) {
   console.error('❌ DATABASE_URL no está configurada para PostgreSQL');
+  console.error('   Configura DATABASE_URL en tu archivo .env o como variable de entorno');
+  process.exit(1);
+}
+
+// Verificar configuración de MySQL
+if (!mysqlConfig.password) {
+  console.error('❌ MYSQL_PASSWORD no está configurada');
+  console.error('\n📝 Para configurar MySQL, crea un archivo .env en la carpeta backend/ con:');
+  console.error('   MYSQL_HOST=localhost');
+  console.error('   MYSQL_PORT=3306');
+  console.error('   MYSQL_USER=root');
+  console.error('   MYSQL_PASSWORD=tu_password_mysql');
+  console.error('   MYSQL_DATABASE=tactical_inventory');
+  console.error('   DATABASE_URL=postgresql://...');
   process.exit(1);
 }
 
