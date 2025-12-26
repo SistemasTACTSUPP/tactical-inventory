@@ -11,6 +11,22 @@ const isPostgreSQL = process.env.DATABASE_URL?.startsWith('postgresql://') ||
                      process.env.DB_PORT === '5432' || 
                      process.env.DB_TYPE === 'postgresql';
 
+// Función para limpiar comentarios de un statement
+const cleanStatement = (stmt) => {
+  let cleaned = stmt;
+  
+  // Eliminar comentarios de línea (-- hasta el final de la línea)
+  cleaned = cleaned.replace(/--[^\n]*/g, '');
+  
+  // Eliminar comentarios de bloque (/* ... */)
+  cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
+  
+  // Limpiar espacios en blanco al inicio y final
+  cleaned = cleaned.trim();
+  
+  return cleaned;
+};
+
 // Función para convertir SQL de MySQL a PostgreSQL
 const convertToPostgreSQL = (sql) => {
   if (!isPostgreSQL) return sql;
@@ -69,17 +85,17 @@ const runMigration = async () => {
     const rawStatements = sql.split(';');
     console.log(`📝 Statements encontrados (raw): ${rawStatements.length}`);
     
+    // Limpiar y filtrar statements
     const statements = rawStatements
-      .map(stmt => stmt.trim())
+      .map(stmt => cleanStatement(stmt))
       .filter(stmt => {
-        const trimmed = stmt.trim();
-        // Filtrar solo comentarios y líneas completamente vacías
-        if (trimmed.length === 0) return false;
-        if (trimmed.startsWith('--')) return false;
-        if (trimmed.startsWith('/*')) return false;
-        // Aceptar cualquier statement que tenga CREATE, INSERT, ALTER, etc.
-        const hasSqlKeyword = /^(CREATE|INSERT|ALTER|UPDATE|DELETE|DROP|SELECT)/i.test(trimmed);
-        return hasSqlKeyword || trimmed.length > 20; // Aceptar statements largos aunque no tengan keyword
+        // Filtrar solo statements vacíos después de limpiar
+        if (stmt.length === 0) return false;
+        
+        // Aceptar cualquier statement que tenga keywords SQL importantes
+        const hasSqlKeyword = /^(CREATE|INSERT|ALTER|UPDATE|DELETE|DROP|SELECT|GRANT|REVOKE)/i.test(stmt);
+        
+        return hasSqlKeyword;
       });
     
     console.log(`📝 Statements válidos después del filtrado: ${statements.length}`);
@@ -88,6 +104,12 @@ const runMigration = async () => {
       console.error('❌ No se encontraron statements válidos para ejecutar');
       console.log('🔍 Primeros 1000 caracteres del SQL convertido:');
       console.log(sql.substring(0, 1000));
+      console.log('\n🔍 Ejemplo de statements raw (primeros 3):');
+      rawStatements.slice(0, 3).forEach((stmt, idx) => {
+        const cleaned = cleanStatement(stmt);
+        console.log(`  ${idx + 1}. Length: ${cleaned.length}, Preview: ${cleaned.substring(0, 60)}...`);
+        console.log(`     Has CREATE: ${/CREATE/i.test(cleaned)}`);
+      });
       process.exit(1);
     }
     
@@ -107,7 +129,7 @@ const runMigration = async () => {
         try {
           // Mostrar los primeros 60 caracteres del statement para debug
           const preview = statement.substring(0, 60).replace(/\n/g, ' ').trim();
-          console.log(`  🔄 [${i + 1}/${statements.length}] ${preview}...`);
+          console.log(`\n  🔄 [${i + 1}/${statements.length}] ${preview}...`);
           
           await pool.execute(statement);
           successCount++;
@@ -126,8 +148,8 @@ const runMigration = async () => {
             console.warn(`     ❌ Error: ${error.message}`);
             // Mostrar más detalles del error para CREATE TABLE
             if (statement.toUpperCase().includes('CREATE TABLE')) {
-              console.warn(`     📝 Statement problemático (primeros 200 chars):`);
-              console.warn(`     ${statement.substring(0, 200)}`);
+              console.warn(`     📝 Statement problemático (primeros 300 chars):`);
+              console.warn(`     ${statement.substring(0, 300)}`);
             }
             errorCount++;
           }
