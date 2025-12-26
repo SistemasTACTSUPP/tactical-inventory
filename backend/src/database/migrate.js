@@ -25,31 +25,33 @@ const convertToPostgreSQL = (sql) => {
   converted = converted.replace(/\bINT\s+AUTO_INCREMENT\b/gi, 'SERIAL');
   converted = converted.replace(/\bINTEGER\s+AUTO_INCREMENT\b/gi, 'SERIAL');
   
-  // Convertir ENUM de MySQL a PostgreSQL (crear tipo primero)
-  // Por ahora, usaremos VARCHAR con CHECK constraint
-  converted = converted.replace(/\bENUM\(([^)]+)\)/gi, (match, values) => {
-    return `VARCHAR(50) CHECK (${match.replace('ENUM', '').replace(/\(/g, 'IN (').replace(/\)/g, ')')})`;
+  // Convertir ENUM a VARCHAR con CHECK constraint
+  converted = converted.replace(/role\s+ENUM\(([^)]+)\)/gi, (match, values) => {
+    return `role VARCHAR(50) CHECK (role IN ${values})`;
+  });
+  converted = converted.replace(/site\s+ENUM\(([^)]+)\)/gi, (match, values) => {
+    return `site VARCHAR(50) CHECK (site IN ${values})`;
+  });
+  converted = converted.replace(/status\s+ENUM\(([^)]+)\)/gi, (match, values) => {
+    return `status VARCHAR(50) CHECK (status IN ${values})`;
+  });
+  converted = converted.replace(/dispatch_type\s+ENUM\(([^)]+)\)/gi, (match, values) => {
+    return `dispatch_type VARCHAR(50) CHECK (dispatch_type IN ${values})`;
+  });
+  converted = converted.replace(/destination\s+ENUM\(([^)]+)\)/gi, (match, values) => {
+    return `destination VARCHAR(50) CHECK (destination IN ${values})`;
   });
   
-  // Mejor: convertir ENUM a tipo personalizado o VARCHAR con CHECK
-  // Simplificado: usar VARCHAR con CHECK
-  converted = converted.replace(/role\s+ENUM\(([^)]+)\)/gi, "role VARCHAR(50) CHECK (role IN ($1))");
-  converted = converted.replace(/site\s+ENUM\(([^)]+)\)/gi, "site VARCHAR(50) CHECK (site IN ($1))");
-  converted = converted.replace(/status\s+ENUM\(([^)]+)\)/gi, "status VARCHAR(50) CHECK (status IN ($1))");
-  converted = converted.replace(/dispatch_type\s+ENUM\(([^)]+)\)/gi, "dispatch_type VARCHAR(50) CHECK (dispatch_type IN ($1))");
-  converted = converted.replace(/destination\s+ENUM\(([^)]+)\)/gi, "destination VARCHAR(50) CHECK (destination IN ($1))");
-  
-  // Eliminar ON UPDATE CURRENT_TIMESTAMP (PostgreSQL usa triggers)
+  // Eliminar ON UPDATE CURRENT_TIMESTAMP (PostgreSQL usa triggers, pero por ahora lo ignoramos)
   converted = converted.replace(/\s+ON UPDATE CURRENT_TIMESTAMP/gi, '');
   
   // Convertir UNIQUE KEY a CONSTRAINT
-  converted = converted.replace(/UNIQUE KEY\s+(\w+)\s*\(([^)]+)\)/gi, 'CONSTRAINT $1 UNIQUE ($2)');
+  converted = converted.replace(/,\s*UNIQUE KEY\s+(\w+)\s*\(([^)]+)\)/gi, ', CONSTRAINT $1 UNIQUE ($2)');
   
-  // Convertir ON DUPLICATE KEY UPDATE (MySQL) a ON CONFLICT (PostgreSQL)
-  converted = converted.replace(/ON DUPLICATE KEY UPDATE\s+(\w+)=VALUES\((\w+)\)/gi, 
-    'ON CONFLICT (access_code) DO UPDATE SET $1 = EXCLUDED.$2');
+  // Convertir ON DUPLICATE KEY UPDATE (MySQL) - eliminarlo por ahora, se manejará en el código
+  converted = converted.replace(/ON DUPLICATE KEY UPDATE[^;]*/gi, '');
   
-  // Eliminar CHARACTER SET y COLLATE de CREATE DATABASE
+  // Eliminar CHARACTER SET y COLLATE
   converted = converted.replace(/\s+CHARACTER SET\s+\w+/gi, '');
   converted = converted.replace(/\s+COLLATE\s+\w+/gi, '');
   
@@ -74,27 +76,70 @@ const runMigration = async () => {
     const statements = sql
       .split(';')
       .map(stmt => stmt.trim())
-      .filter(stmt => stmt.length > 0 && !stmt.startsWith('--'));
+      .filter(stmt => {
+        // Filtrar comentarios y líneas vacías
+        const trimmed = stmt.trim();
+        return trimmed.length > 0 && 
+               !trimmed.startsWith('--') && 
+               !trimmed.startsWith('/*') &&
+               trimmed !== '';
+      });
+    
+    console.log(`📝 Encontrados ${statements.length} statements para ejecutar`);
     
     // Ejecutar cada statement
-    for (const statement of statements) {
+    let successCount = 0;
+    let errorCount = 0;
+    
+    for (let i = 0; i < statements.length; i++) {
+      const statement = statements[i];
       if (statement.length > 0) {
         try {
           await pool.execute(statement);
+          successCount++;
+          // Mostrar progreso cada 5 statements
+          if ((i + 1) % 5 === 0) {
+            console.log(`  ✅ Procesados ${i + 1}/${statements.length} statements...`);
+          }
         } catch (error) {
           // Ignorar errores de "ya existe" para tablas
-          if (!error.message.includes('already exists') && 
-              !error.message.includes('Duplicate key') &&
-              !error.message.includes('duplicate key') &&
-              !error.message.includes('relation') && // PostgreSQL
-              !error.message.includes('syntax error at or near "USE"')) { // Ignorar USE
-            console.warn(`⚠️  Advertencia: ${error.message}`);
+          const errorMsg = error.message.toLowerCase();
+          if (errorMsg.includes('already exists') || 
+              errorMsg.includes('duplicate key') ||
+              errorMsg.includes('relation') && errorMsg.includes('already exists') ||
+              errorMsg.includes('syntax error at or near "use"') ||
+              errorMsg.includes('syntax error at or near "create database"')) {
+            // Ignorar estos errores
+          } else {
+            console.warn(`⚠️  Advertencia en statement ${i + 1}: ${error.message}`);
+            errorCount++;
           }
         }
       }
     }
     
-    console.log('✅ Migración completada exitosamente');
+    console.log(`✅ Migración completada: ${successCount} exitosos, ${errorCount} advertencias`);
+    
+    // Verificar que las tablas principales existan
+    if (isPostgreSQL) {
+      console.log('🔍 Verificando que las tablas se crearon correctamente...');
+      try {
+        const [tables] = await pool.execute(`
+          SELECT table_name 
+          FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_type = 'BASE TABLE'
+          ORDER BY table_name
+        `);
+        console.log(`📊 Tablas encontradas: ${tables.length}`);
+        tables.forEach(table => {
+          console.log(`  - ${table.table_name}`);
+        });
+      } catch (error) {
+        console.warn(`⚠️  No se pudo verificar tablas: ${error.message}`);
+      }
+    }
+    
     process.exit(0);
   } catch (error) {
     console.error('❌ Error en la migración:', error);
