@@ -11,6 +11,7 @@
     "seed-users": "node src/database/seed-users.js",
     "seed-cedis": "node src/database/seed-cedis.js",
     "seed-employees": "node src/database/seed-cedis-employees-full.js",
+    "migrate-employees": "node src/database/migrate-employees.js",
     "show-inventories": "node src/database/show-inventories.js"
   },
   "keywords": ["inventory", "tactical", "api"],
