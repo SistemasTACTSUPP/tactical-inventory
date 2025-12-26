@@ -239,13 +239,17 @@ router.get('/:id', authenticateToken, requireRole('Admin'), async (req, res) => 
     const [items] = await pool.execute(getItemsQuery, [id]);
     
     // Transformar items de snake_case a camelCase
-    const transformedItems = items.map(item => ({
-      id: item.id,
-      code: item.code,
-      description: item.description,
-      qty: item.qty,
-      unitPrice: item.unit_price || item.unitPrice || 0
-    }));
+    console.log(`📦 GET /orders/${id} - Items encontrados: ${items.length}`);
+    const transformedItems = items.map(item => {
+      console.log(`   Item: ${item.code} - ${item.description} - Qty: ${item.qty}`);
+      return {
+        id: item.id,
+        code: item.code,
+        description: item.description,
+        qty: item.qty,
+        unitPrice: item.unit_price || item.unitPrice || 0
+      };
+    });
     
     // Transformar pedido a camelCase
     const transformedOrder = {
@@ -261,10 +265,69 @@ router.get('/:id', authenticateToken, requireRole('Admin'), async (req, res) => 
       items: transformedItems
     };
     
+    console.log(`   ✅ Enviando pedido con ${transformedItems.length} items`);
     res.json(transformedOrder);
   } catch (error) {
     console.error('Error al obtener pedido:', error);
     res.status(500).json({ error: 'Error al obtener pedido' });
+  }
+});
+
+// Eliminar pedido
+router.delete('/:id', authenticateToken, requireRole('Admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const connection = await pool.getConnection();
+    
+    try {
+      if (connection.beginTransaction) {
+        await connection.beginTransaction();
+      }
+
+      // Verificar que el pedido existe
+      const checkQuery = isPostgreSQL
+        ? 'SELECT * FROM orders WHERE id = $1'
+        : 'SELECT * FROM orders WHERE id = ?';
+      const [orders] = await connection.execute(checkQuery, [id]);
+      
+      if (orders.length === 0) {
+        if (connection.rollback) {
+          await connection.rollback();
+        }
+        return res.status(404).json({ error: 'Pedido no encontrado' });
+      }
+
+      // Eliminar items del pedido primero
+      const deleteItemsQuery = isPostgreSQL
+        ? 'DELETE FROM order_items WHERE order_id = $1'
+        : 'DELETE FROM order_items WHERE order_id = ?';
+      await connection.execute(deleteItemsQuery, [id]);
+
+      // Eliminar el pedido
+      const deleteOrderQuery = isPostgreSQL
+        ? 'DELETE FROM orders WHERE id = $1'
+        : 'DELETE FROM orders WHERE id = ?';
+      await connection.execute(deleteOrderQuery, [id]);
+
+      if (connection.commit) {
+        await connection.commit();
+      }
+      
+      res.json({ message: 'Pedido eliminado correctamente' });
+    } catch (error) {
+      if (connection.rollback) {
+        await connection.rollback();
+      }
+      throw error;
+    } finally {
+      if (connection && typeof connection.release === 'function') {
+        connection.release();
+      }
+    }
+  } catch (error) {
+    console.error('Error al eliminar pedido:', error);
+    res.status(500).json({ error: 'Error al eliminar pedido' });
   }
 });
 
