@@ -102,8 +102,8 @@ const migrateEmployees = async () => {
     }
     
     // Verificar cuántos empleados ya existen en PostgreSQL
-    const [existing] = await pgPool.query('SELECT COUNT(*) as count FROM employees');
-    const existingCount = parseInt(existing.rows[0].count);
+    const existingResult = await pgPool.query('SELECT COUNT(*) as count FROM employees');
+    const existingCount = parseInt(existingResult.rows[0].count);
     console.log(`📊 Empleados existentes en PostgreSQL: ${existingCount}`);
     
     // Migrar empleados
@@ -115,12 +115,12 @@ const migrateEmployees = async () => {
     for (const emp of employees) {
       try {
         // Verificar si ya existe
-        const [existing] = await pgPool.query(
+        const existingResult = await pgPool.query(
           'SELECT employee_id FROM employees WHERE employee_id = $1',
           [emp.employee_id]
         );
         
-        if (existing.rows.length > 0) {
+        if (existingResult.rows.length > 0) {
           // Actualizar empleado existente
           await pgPool.query(
             `UPDATE employees 
@@ -181,8 +181,8 @@ const migrateEmployees = async () => {
     console.log(`  ⚠️  Errores: ${errors}`);
     
     // Verificar resultado final
-    const [final] = await pgPool.query('SELECT COUNT(*) as count FROM employees');
-    console.log(`\n📊 Total de empleados en PostgreSQL: ${final.rows[0].count}`);
+    const finalResult = await pgPool.query('SELECT COUNT(*) as count FROM employees');
+    console.log(`\n📊 Total de empleados en PostgreSQL: ${finalResult.rows[0].count}`);
     
     process.exit(0);
   } catch (error) {
