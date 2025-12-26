@@ -10,8 +10,6 @@ console.log('  DB_PORT:', process.env.DB_PORT || 'NO CONFIGURADA');
 console.log('  NODE_ENV:', process.env.NODE_ENV || 'NO CONFIGURADA');
 
 // Detectar si es PostgreSQL
-// En Render, si hay DATABASE_URL que empiece con postgresql://, es PostgreSQL
-// También podemos detectar por el puerto 5432 o por variables específicas
 const hasPostgresUrl = process.env.DATABASE_URL?.startsWith('postgresql://');
 const hasPostgresPort = process.env.DB_PORT === '5432' || process.env.DB_PORT === 5432;
 const isPostgreSQL = hasPostgresUrl || hasPostgresPort || process.env.DB_TYPE === 'postgresql';
@@ -72,7 +70,35 @@ const initPool = async () => {
         return [result.rows, result.fields || []];
       },
       getConnection: async () => {
-        return pgPool;
+        // Para PostgreSQL, obtener un cliente del pool para transacciones
+        const client = await pgPool.connect();
+        // Crear un wrapper que simule la interfaz de MySQL
+        return {
+          execute: async (sql, params = []) => {
+            let paramIndex = 1;
+            const convertedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+            const result = await client.query(convertedSql, params);
+            return [result.rows, result.fields || []];
+          },
+          query: async (sql, params = []) => {
+            let paramIndex = 1;
+            const convertedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+            const result = await client.query(convertedSql, params);
+            return [result.rows, result.fields || []];
+          },
+          beginTransaction: async () => {
+            await client.query('BEGIN');
+          },
+          commit: async () => {
+            await client.query('COMMIT');
+          },
+          rollback: async () => {
+            await client.query('ROLLBACK');
+          },
+          release: () => {
+            client.release();
+          }
+        };
       }
     };
   } else {

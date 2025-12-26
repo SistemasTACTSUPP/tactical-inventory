@@ -73,25 +73,16 @@ router.post('/', authenticateToken, async (req, res) => {
       }
     }
 
-    // Para PostgreSQL, usar transacciones SQL directamente
-    // Para MySQL, usar getConnection() si está disponible
-    let connection = null;
-    let useTransaction = false;
-
+    // Obtener conexión para transacciones (funciona para ambos PostgreSQL y MySQL)
+    const connection = await pool.getConnection();
+    
     try {
-      // Intentar obtener conexión solo para MySQL
-      if (!isPostgreSQL && typeof pool.getConnection === 'function') {
-        connection = await pool.getConnection();
-        if (connection && typeof connection.beginTransaction === 'function') {
-          await connection.beginTransaction();
-          useTransaction = true;
-        }
-      } else if (isPostgreSQL) {
-        // Para PostgreSQL, iniciar transacción con SQL
-        await pool.execute('BEGIN');
+      // Iniciar transacción
+      if (connection.beginTransaction) {
+        await connection.beginTransaction();
       }
-
-      const executeQuery = connection || pool;
+      
+      const executeQuery = connection;
 
       // Crear entrada
       const insertEntryQuery = isPostgreSQL
@@ -149,10 +140,8 @@ router.post('/', authenticateToken, async (req, res) => {
       }
 
       // Commit transacción
-      if (useTransaction && connection) {
+      if (connection.commit) {
         await connection.commit();
-      } else if (isPostgreSQL) {
-        await pool.execute('COMMIT');
       }
       
       // Emitir eventos en tiempo real
@@ -162,14 +151,12 @@ router.post('/', authenticateToken, async (req, res) => {
       res.json({ id: entryId, message: 'Entrada creada correctamente' });
     } catch (error) {
       // Rollback transacción
-      if (useTransaction && connection) {
+      if (connection.rollback) {
         await connection.rollback();
-      } else if (isPostgreSQL) {
-        await pool.execute('ROLLBACK');
       }
       throw error;
     } finally {
-      // Solo release si es MySQL
+      // Release conexión
       if (connection && typeof connection.release === 'function') {
         connection.release();
       }
