@@ -52,13 +52,21 @@ router.get('/', authenticateToken, requireRole('Admin'), async (req, res) => {
     const ordersQuery = 'SELECT * FROM orders ORDER BY date DESC, id DESC';
     const [orders] = await pool.execute(ordersQuery);
 
-    // Obtener items para cada pedido
+    // Obtener items para cada pedido y transformar a camelCase
     for (const order of orders) {
       const itemsQuery = isPostgreSQL
         ? 'SELECT * FROM order_items WHERE order_id = $1'
         : 'SELECT * FROM order_items WHERE order_id = ?';
       const [items] = await pool.execute(itemsQuery, [order.id]);
-      order.items = items;
+      
+      // Transformar items de snake_case a camelCase
+      order.items = items.map(item => ({
+        id: item.id,
+        code: item.code,
+        description: item.description,
+        qty: item.qty,
+        unitPrice: item.unit_price || item.unitPrice || 0
+      }));
     }
 
     res.json(orders);
@@ -165,6 +173,44 @@ router.post('/', authenticateToken, requireRole('Admin'), async (req, res) => {
   } catch (error) {
     console.error('Error al crear pedido:', error);
     res.status(500).json({ error: 'Error al crear pedido' });
+  }
+});
+
+// Obtener un pedido específico por ID
+router.get('/:id', authenticateToken, requireRole('Admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const getOrderQuery = isPostgreSQL
+      ? 'SELECT * FROM orders WHERE id = $1'
+      : 'SELECT * FROM orders WHERE id = ?';
+    const [orders] = await pool.execute(getOrderQuery, [id]);
+    
+    if (orders.length === 0) {
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    
+    const order = orders[0];
+    
+    // Obtener items del pedido
+    const getItemsQuery = isPostgreSQL
+      ? 'SELECT * FROM order_items WHERE order_id = $1'
+      : 'SELECT * FROM order_items WHERE order_id = ?';
+    const [items] = await pool.execute(getItemsQuery, [id]);
+    
+    // Transformar items de snake_case a camelCase
+    order.items = items.map(item => ({
+      id: item.id,
+      code: item.code,
+      description: item.description,
+      qty: item.qty,
+      unitPrice: item.unit_price || item.unitPrice || 0
+    }));
+    
+    res.json(order);
+  } catch (error) {
+    console.error('Error al obtener pedido:', error);
+    res.status(500).json({ error: 'Error al obtener pedido' });
   }
 });
 
