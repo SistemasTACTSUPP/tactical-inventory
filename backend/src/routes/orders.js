@@ -112,8 +112,12 @@ router.post('/', authenticateToken, requireRole('Admin'), async (req, res) => {
       );
 
       const orderId = isPostgreSQL 
-        ? (orderResult[0]?.id || orderResult.id)
-        : orderResult.insertId;
+        ? (orderResult[0]?.id || orderResult.id || null)
+        : (orderResult.insertId || orderResult[0]?.id);
+      
+      if (!orderId) {
+        throw new Error('No se pudo obtener el ID del pedido creado');
+      }
 
       // Crear items de pedido
       for (const item of items) {
@@ -134,10 +138,10 @@ router.post('/', authenticateToken, requireRole('Admin'), async (req, res) => {
       const getOrderQuery = isPostgreSQL
         ? 'SELECT * FROM orders WHERE id = $1'
         : 'SELECT * FROM orders WHERE id = ?';
-      const [orderResult] = await connection.execute(getOrderQuery, [orderId]);
+      const [fullOrderResult] = await connection.execute(getOrderQuery, [orderId]);
       
-      if (orderResult.length > 0) {
-        const order = orderResult[0];
+      if (fullOrderResult.length > 0) {
+        const order = fullOrderResult[0];
         const getItemsQuery = isPostgreSQL
           ? 'SELECT * FROM order_items WHERE order_id = $1'
           : 'SELECT * FROM order_items WHERE order_id = ?';
