@@ -1,6 +1,11 @@
 import pool from '../config/database.js';
 import { cedisRawData } from '../data/cedisInventoryData.js';
 
+// Detectar si es PostgreSQL
+const isPostgreSQL = process.env.DATABASE_URL?.startsWith('postgresql://') || 
+                     process.env.DB_PORT === '5432' || 
+                     process.env.DB_TYPE === 'postgresql';
+
 // Función para extraer la talla de la descripción
 const extractSize = (description) => {
   const sizePatterns = [
@@ -22,14 +27,21 @@ const seedCedisData = async () => {
   try {
     console.log('🔄 Iniciando migración de datos de CEDIS...');
     
-    const connection = await pool.getConnection();
+    let inserted = 0;
+    let updated = 0;
+    
+    // Para PostgreSQL, usar transacciones directamente con el pool
+    // Para MySQL, usar getConnection() si está disponible
+    const useTransaction = !isPostgreSQL && typeof pool.getConnection === 'function';
+    
+    let connection = null;
+    
+    if (useTransaction) {
+      connection = await pool.getConnection();
+      await connection.beginTransaction();
+    }
     
     try {
-      await connection.beginTransaction();
-      
-      let inserted = 0;
-      let updated = 0;
-      
       for (const item of cedisRawData) {
         if (!item.code || item.code.trim() === '') continue;
         
@@ -59,46 +71,104 @@ const seedCedisData = async () => {
           status = 'Reordenar';
         }
         
-        // Insertar o actualizar
-        const [result] = await connection.execute(
-          `INSERT INTO inventory_items 
-           (code, description, size, stock_new, stock_recovered, stock_min, site, status)
-           VALUES (?, ?, ?, ?, ?, ?, 'CEDIS', ?)
-           ON DUPLICATE KEY UPDATE
-           description = VALUES(description),
-           size = VALUES(size),
-           stock_new = VALUES(stock_new),
-           stock_recovered = VALUES(stock_recovered),
-           stock_min = VALUES(stock_min),
-           status = VALUES(status),
-           updated_at = CURRENT_TIMESTAMP`,
-          [item.code, item.description, size, stockNew, stockRecovered, stockMin, status]
-        );
-        
-        if (result.affectedRows === 1) {
-          inserted++;
+        // Insertar o actualizar - sintaxis diferente para PostgreSQL y MySQL
+        let result;
+        if (isPostgreSQL) {
+          // PostgreSQL usa ON CONFLICT
+          [result] = await pool.execute(
+            `INSERT INTO inventory_items 
+             (code, description, size, stock_new, stock_recovered, stock_min, site, status)
+             VALUES ($1, $2, $3, $4, $5, $6, 'CEDIS', $7)
+             ON CONFLICT (code, site) DO UPDATE SET
+             description = EXCLUDED.description,
+             size = EXCLUDED.size,
+             stock_new = EXCLUDED.stock_new,
+             stock_recovered = EXCLUDED.stock_recovered,
+             stock_min = EXCLUDED.stock_min,
+             status = EXCLUDED.status,
+             updated_at = CURRENT_TIMESTAMP`,
+            [item.code, item.description, size, stockNew, stockRecovered, stockMin, status]
+          );
         } else {
-          updated++;
+          // MySQL usa ON DUPLICATE KEY UPDATE
+          [result] = await (connection || pool).execute(
+            `INSERT INTO inventory_items 
+             (code, description, size, stock_new, stock_recovered, stock_min, site, status)
+             VALUES (?, ?, ?, ?, ?, ?, 'CEDIS', ?)
+             ON DUPLICATE KEY UPDATE
+             description = VALUES(description),
+             size = VALUES(size),
+             stock_new = VALUES(stock_new),
+             stock_recovered = VALUES(stock_recovered),
+             stock_min = VALUES(stock_min),
+             status = VALUES(status),
+             updated_at = CURRENT_TIMESTAMP`,
+            [item.code, item.description, size, stockNew, stockRecovered, stockMin, status]
+          );
+        }
+        
+        // Verificar si fue insert o update
+        if (isPostgreSQL) {
+          // PostgreSQL devuelve rowCount
+          if (result && result.length > 0 && result[0] && result[0].rowCount !== undefined) {
+            // Es un resultado de query, verificar si hay filas
+            const rowCount = result[0].rowCount || (Array.isArray(result[0]) ? result[0].length : 0);
+            if (rowCount > 0) {
+              // Necesitamos verificar si ya existía
+              const [existing] = await pool.execute(
+                'SELECT code FROM inventory_items WHERE code = $1 AND site = $2',
+                [item.code, 'CEDIS']
+              );
+              if (existing && existing.length > 0) {
+                updated++;
+              } else {
+                inserted++;
+              }
+            }
+          } else {
+            // Intentar determinar si fue insert o update
+            const [existing] = await pool.execute(
+              'SELECT code FROM inventory_items WHERE code = $1 AND site = $2',
+              [item.code, 'CEDIS']
+            );
+            if (existing && existing.length > 0) {
+              updated++;
+            } else {
+              inserted++;
+            }
+          }
+        } else {
+          // MySQL devuelve affectedRows
+          if (result.affectedRows === 1) {
+            inserted++;
+          } else {
+            updated++;
+          }
         }
       }
       
-      await connection.commit();
+      if (useTransaction && connection) {
+        await connection.commit();
+      }
+      
       console.log(`✅ Migración completada: ${inserted} insertados, ${updated} actualizados`);
     } catch (error) {
-      await connection.rollback();
+      if (useTransaction && connection) {
+        await connection.rollback();
+      }
       throw error;
     } finally {
-      connection.release();
+      if (connection && typeof connection.release === 'function') {
+        connection.release();
+      }
     }
     
     process.exit(0);
   } catch (error) {
     console.error('❌ Error en la migración:', error);
+    console.error('Detalles:', error.message);
     process.exit(1);
   }
 };
 
-// Nota: Este script requiere que los datos estén en el backend
-// Por ahora, vamos a crear una versión que lea desde un archivo JSON
 seedCedisData();
-
